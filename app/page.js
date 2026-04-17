@@ -2,75 +2,6 @@
 
 import { useState, useEffect, useRef } from "react";
 
-const MOCK_RESULTS = {
-  high: {
-    score: 87,
-    label: "High Potential",
-    color: "#22c55e",
-    summary:
-      "This topic has strong search demand with relatively low competition. Trending upward over the past 90 days.",
-    searchVolume: { value: "18,400/mo", rating: "High" },
-    competition: { value: "Medium", rating: "Medium", count: 34 },
-    trendDirection: { value: "Rising", rating: "High", change: "+42%" },
-    titleScore: { value: "8.2/10", rating: "High" },
-    insights: [
-      "Search volume has grown 42% in the last 3 months",
-      "Only 3 videos in the top 20 have over 100K views — room to compete",
-      "Top-performing titles in this space use numbers and specific tools",
-      "Best posting window: Tuesday-Thursday based on audience activity",
-    ],
-    titleSuggestions: [
-      "5 AI Tools That Will 10x Your Video Editing Speed",
-      "I Tried Every AI Video Editor — Here's What Actually Works",
-      "AI Video Editing in 2026: The Complete Beginner's Guide",
-    ],
-  },
-  medium: {
-    score: 58,
-    label: "Worth Trying",
-    color: "#eab308",
-    summary:
-      "Moderate demand exists but the space is getting crowded. Consider a unique angle to stand out.",
-    searchVolume: { value: "8,200/mo", rating: "Medium" },
-    competition: { value: "High", rating: "Low", count: 127 },
-    trendDirection: { value: "Stable", rating: "Medium", change: "+3%" },
-    titleScore: { value: "6.1/10", rating: "Medium" },
-    insights: [
-      "The topic is well-covered — you'll need a fresh angle to rank",
-      "Videos under 12 minutes perform best in this niche",
-      "Listicle formats outperform tutorial formats by 2.3x here",
-      "Consider targeting a sub-niche for less competition",
-    ],
-    titleSuggestions: [
-      "What Nobody Tells You About Morning Routines",
-      "I Followed 7 Morning Routines — Only 1 Actually Worked",
-      "The Anti-Morning-Routine That Changed My Productivity",
-    ],
-  },
-  low: {
-    score: 24,
-    label: "Risky",
-    color: "#ef4444",
-    summary:
-      "Low search demand and declining interest. This topic is unlikely to gain traction without an existing audience.",
-    searchVolume: { value: "720/mo", rating: "Low" },
-    competition: { value: "Low", rating: "High", count: 8 },
-    trendDirection: { value: "Declining", rating: "Low", change: "-28%" },
-    titleScore: { value: "4.3/10", rating: "Low" },
-    insights: [
-      "Search interest has dropped 28% over the past 6 months",
-      "Very few creators cover this — but audience demand is also low",
-      "The existing videos have poor engagement, suggesting weak intent",
-      "Consider pivoting to a related topic with stronger demand",
-    ],
-    titleSuggestions: [
-      "Consider a different angle on this topic entirely",
-      "Try combining this with a trending topic for more reach",
-      "A personal story angle might outperform a tutorial here",
-    ],
-  },
-};
-
 const EXAMPLE_IDEAS = [
   "AI tools for video editing in 2026",
   "Morning routine for productivity",
@@ -251,7 +182,11 @@ function MetricCard({ label, value, rating, detail, delay }) {
       </div>
       {detail && (
         <div
-          style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", marginTop: 6 }}
+          style={{
+            fontSize: 12,
+            color: "rgba(255,255,255,0.3)",
+            marginTop: 6,
+          }}
         >
           {detail}
         </div>
@@ -263,7 +198,7 @@ function MetricCard({ label, value, rating, detail, delay }) {
 function InsightItem({ text, index }) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => setVisible(true), 600 + index * 120);
+    const t = setTimeout(() => setVisible(true), 300 + index * 120);
     return () => clearTimeout(t);
   }, [index]);
 
@@ -355,39 +290,39 @@ export default function Home() {
   const [idea, setIdea] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("insights");
   const inputRef = useRef(null);
 
-  const analyze = (text) => {
+  const analyze = async (text) => {
     const input = text || idea;
     if (!input.trim()) return;
     setLoading(true);
     setResult(null);
+    setError(null);
     setActiveTab("insights");
 
-    // Mock analysis — will be replaced with real API calls in Step 3
-    setTimeout(() => {
-      const lower = input.toLowerCase();
-      let resultKey = "medium";
-      if (
-        lower.includes("ai") ||
-        lower.includes("budget") ||
-        lower.includes("beginner") ||
-        lower.includes("2026") ||
-        lower.includes("learn")
-      ) {
-        resultKey = "high";
-      } else if (
-        lower.includes("fix") ||
-        lower.includes("repair") ||
-        lower.includes("old") ||
-        lower.includes("faucet")
-      ) {
-        resultKey = "low";
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idea: input }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error || "Something went wrong");
+        setLoading(false);
+        return;
       }
-      setResult(MOCK_RESULTS[resultKey]);
-      setLoading(false);
-    }, 2200);
+
+      setResult(data);
+    } catch (err) {
+      setError("Failed to connect. Please check your internet and try again.");
+    }
+
+    setLoading(false);
   };
 
   return (
@@ -501,7 +436,8 @@ export default function Home() {
               margin: "10px auto 0",
             }}
           >
-            Validate your YouTube video ideas before you invest the time.
+            Validate your YouTube video ideas with real data before you invest
+            the time.
           </p>
         </div>
 
@@ -542,10 +478,9 @@ export default function Home() {
             onClick={() => analyze()}
             disabled={loading || !idea.trim()}
             style={{
-              background:
-                loading
-                  ? "rgba(99,102,241,0.3)"
-                  : "linear-gradient(135deg, #6366f1, #7c3aed)",
+              background: loading
+                ? "rgba(99,102,241,0.3)"
+                : "linear-gradient(135deg, #6366f1, #7c3aed)",
               border: "none",
               borderRadius: 14,
               padding: "12px 28px",
@@ -567,7 +502,7 @@ export default function Home() {
         </div>
 
         {/* Example ideas */}
-        {!result && !loading && (
+        {!result && !loading && !error && (
           <div
             style={{
               display: "flex",
@@ -646,8 +581,61 @@ export default function Home() {
                 fontWeight: 500,
               }}
             >
-              Analyzing search volume, competition & trends...
+              Pulling real YouTube data and crunching the numbers...
             </div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {error && !loading && (
+          <div
+            style={{
+              textAlign: "center",
+              padding: "40px 20px",
+              background: "rgba(239,68,68,0.05)",
+              border: "1px solid rgba(239,68,68,0.15)",
+              borderRadius: 16,
+              marginTop: 20,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 15,
+                color: "#ef4444",
+                fontWeight: 600,
+                marginBottom: 8,
+              }}
+            >
+              Analysis Failed
+            </div>
+            <div
+              style={{
+                fontSize: 14,
+                color: "rgba(255,255,255,0.4)",
+                marginBottom: 16,
+              }}
+            >
+              {error}
+            </div>
+            <button
+              onClick={() => {
+                setError(null);
+                inputRef.current?.focus();
+              }}
+              style={{
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 10,
+                padding: "8px 20px",
+                color: "rgba(255,255,255,0.6)",
+                fontSize: 13,
+                cursor: "pointer",
+                fontFamily: "system-ui, -apple-system, sans-serif",
+                fontWeight: 500,
+              }}
+            >
+              Try Again
+            </button>
           </div>
         )}
 
@@ -704,14 +692,14 @@ export default function Home() {
               }}
             >
               <MetricCard
-                label="Search Volume"
+                label="Search Demand"
                 value={result.searchVolume.value}
                 rating={result.searchVolume.rating}
                 delay={200}
               />
               <MetricCard
                 label="Competition"
-                value={`${result.competition.count} videos`}
+                value={`${result.competition.count} results`}
                 rating={result.competition.rating}
                 detail={result.competition.value + " competition"}
                 delay={320}
@@ -842,8 +830,7 @@ export default function Home() {
               </div>
               <button
                 style={{
-                  background:
-                    "linear-gradient(135deg, #6366f1, #7c3aed)",
+                  background: "linear-gradient(135deg, #6366f1, #7c3aed)",
                   border: "none",
                   borderRadius: 12,
                   padding: "12px 32px",
