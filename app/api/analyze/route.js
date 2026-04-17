@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import googleTrends from "google-trends-api";
 
 export async function POST(request) {
   try {
@@ -20,40 +21,26 @@ export async function POST(request) {
       );
     }
 
-    // Step 1: Search YouTube for videos matching this idea
-    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
-      idea
-    )}&type=video&maxResults=20&order=relevance&key=${API_KEY}`;
+    // Run YouTube search AND Google Trends at the same time for speed
+    const [youtubeData, trendsData] = await Promise.all([
+      fetchYouTubeData(idea, API_KEY),
+      fetchTrendsData(idea),
+    ]);
 
-    const searchResponse = await fetch(searchUrl);
-    const searchData = await searchResponse.json();
-
-    if (searchData.error) {
+    if (youtubeData.error) {
       return NextResponse.json(
-        { error: "YouTube API error: " + searchData.error.message },
+        { error: youtubeData.error },
         { status: 500 }
       );
     }
 
-    const videos = searchData.items || [];
-    const totalResults = searchData.pageInfo?.totalResults || 0;
+    const {
+      videos,
+      videoStats,
+      totalResults,
+    } = youtubeData;
 
-    if (videos.length === 0) {
-      return NextResponse.json(
-        { error: "No videos found for this topic" },
-        { status: 404 }
-      );
-    }
-
-    // Step 2: Get detailed stats for these videos (views, likes, comments)
-    const videoIds = videos.map((v) => v.id.videoId).join(",");
-    const statsUrl = `https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${videoIds}&key=${API_KEY}`;
-
-    const statsResponse = await fetch(statsUrl);
-    const statsData = await statsResponse.json();
-    const videoStats = statsData.items || [];
-
-    // Step 3: Calculate metrics
+    // Calculate YouTube metrics
     const views = videoStats.map(
       (v) => parseInt(v.statistics.viewCount) || 0
     );
@@ -67,7 +54,9 @@ export async function POST(request) {
     const totalViews = views.reduce((a, b) => a + b, 0);
     const avgViews = Math.round(totalViews / views.length);
     const maxViews = Math.max(...views);
-    const medianViews = views.sort((a, b) => a - b)[Math.floor(views.length / 2)];
+    const medianViews = [...views].sort((a, b) => a - b)[
+      Math.floor(views.length / 2)
+    ];
 
     const totalLikes = likes.reduce((a, b) => a + b, 0);
     const avgLikes = Math.round(totalLikes / likes.length);
@@ -75,7 +64,7 @@ export async function POST(request) {
     const totalComments = comments.reduce((a, b) => a + b, 0);
     const avgComments = Math.round(totalComments / comments.length);
 
-    // Step 4: Analyze upload dates to gauge freshness
+    // Analyze upload dates
     const now = new Date();
     const uploadDates = videos.map(
       (v) => new Date(v.snippet.publishedAt)
@@ -90,26 +79,19 @@ export async function POST(request) {
       (d) => (now - d) / (1000 * 60 * 60 * 24) < 90
     ).length;
 
-    // Step 5: Analyze competition level
+    // Competition level
     const competitionCount = totalResults;
     let competitionLevel;
-    if (competitionCount > 500000) {
-      competitionLevel = "Very High";
-    } else if (competitionCount > 100000) {
-      competitionLevel = "High";
-    } else if (competitionCount > 10000) {
-      competitionLevel = "Medium";
-    } else {
-      competitionLevel = "Low";
-    }
+    if (competitionCount > 500000) competitionLevel = "Very High";
+    else if (competitionCount > 100000) competitionLevel = "High";
+    else if (competitionCount > 10000) competitionLevel = "Medium";
+    else competitionLevel = "Low";
 
-    // Step 6: Analyze title quality
+    // Title quality analysis
     const titleLower = idea.toLowerCase();
     let titleScore = 5;
 
-    // Check for numbers (listicles perform well)
     if (/\d/.test(idea)) titleScore += 1;
-    // Check for power words
     const powerWords = [
       "best", "ultimate", "complete", "guide", "how to", "secret",
       "proven", "easy", "fast", "free", "new", "top", "why",
@@ -119,55 +101,64 @@ export async function POST(request) {
       titleLower.includes(w)
     ).length;
     titleScore += Math.min(powerWordCount, 2);
-    // Check length (optimal is 40-60 chars)
-    if (idea.length >= 40 && idea.length <= 60) {
-      titleScore += 1;
-    } else if (idea.length < 20 || idea.length > 80) {
-      titleScore -= 1;
-    }
-    // Check for specificity (colons, dashes, parentheses suggest structure)
+    if (idea.length >= 40 && idea.length <= 60) titleScore += 1;
+    else if (idea.length < 20 || idea.length > 80) titleScore -= 1;
     if (/[:\-–—|()]/.test(idea)) titleScore += 0.5;
-    // Check for current year
     if (idea.includes("2025") || idea.includes("2026")) titleScore += 0.5;
-
     titleScore = Math.max(1, Math.min(10, titleScore));
 
-    // Step 7: Calculate overall score (0-100)
-    let score = 50; // Start neutral
+    // Engagement rate
+    const engagementRate =
+      avgViews > 0 ? ((avgLikes + avgComments) / avgViews) * 100 : 0;
 
-    // Demand signal: high average views = strong demand
+    // ===== SCORING ALGORITHM =====
+    let score = 50;
+
+    // Demand signal from YouTube views
     if (avgViews > 500000) score += 15;
     else if (avgViews > 100000) score += 12;
     else if (avgViews > 50000) score += 8;
     else if (avgViews > 10000) score += 4;
     else score -= 5;
 
-    // Competition penalty: too many results = harder to rank
+    // Competition penalty
     if (competitionCount > 500000) score -= 15;
     else if (competitionCount > 100000) score -= 8;
     else if (competitionCount > 10000) score -= 3;
     else score += 10;
 
-    // Freshness: recent uploads = active topic
+    // Freshness from YouTube uploads
     if (recentVideos > 10) score += 5;
     else if (recentVideos > 5) score += 8;
     else if (recentVideos > 2) score += 3;
     else score -= 5;
 
-    // Engagement ratio
-    const engagementRate =
-      avgViews > 0 ? ((avgLikes + avgComments) / avgViews) * 100 : 0;
+    // Engagement rate
     if (engagementRate > 5) score += 10;
     else if (engagementRate > 3) score += 6;
     else if (engagementRate > 1) score += 3;
 
-    // Title quality boost
+    // Title quality
     score += (titleScore - 5) * 2;
 
-    // Clamp score between 0 and 100
+    // ===== GOOGLE TRENDS BOOST =====
+    // This is the new part — trend data now influences the score
+    if (trendsData.trend !== "Unknown") {
+      if (trendsData.trend === "Rising Fast") score += 12;
+      else if (trendsData.trend === "Rising") score += 7;
+      else if (trendsData.trend === "Stable") score += 2;
+      else if (trendsData.trend === "Declining") score -= 6;
+      else if (trendsData.trend === "Declining Fast") score -= 12;
+
+      // High current interest is a good sign
+      if (trendsData.currentInterest > 75) score += 5;
+      else if (trendsData.currentInterest < 25) score -= 5;
+    }
+
+    // Clamp score
     score = Math.max(0, Math.min(100, Math.round(score)));
 
-    // Step 8: Determine label and color
+    // Label and color
     let label, color;
     if (score >= 70) {
       label = "High Potential";
@@ -180,7 +171,7 @@ export async function POST(request) {
       color = "#ef4444";
     }
 
-    // Step 9: Build insights
+    // ===== BUILD INSIGHTS =====
     const insights = [];
 
     if (avgViews > 100000) {
@@ -211,9 +202,45 @@ export async function POST(request) {
       );
     }
 
+    // Google Trends insights — the new stuff!
+    if (trendsData.trend !== "Unknown") {
+      if (trendsData.percentChange > 15) {
+        insights.push(
+          `Google Trends shows search interest is up ${trendsData.percentChange}% over the past 3 months — this topic is heating up.`
+        );
+      } else if (trendsData.percentChange > 5) {
+        insights.push(
+          `Google Trends shows a healthy ${trendsData.percentChange}% increase in search interest recently.`
+        );
+      } else if (trendsData.percentChange > -5) {
+        insights.push(
+          `Google Trends shows stable search interest — not growing fast, but consistent demand.`
+        );
+      } else {
+        insights.push(
+          `Google Trends shows search interest is down ${Math.abs(trendsData.percentChange)}% — consider whether this topic is losing relevance.`
+        );
+      }
+
+      if (trendsData.currentInterest > 0 && trendsData.peakInterest > 0) {
+        const peakRatio = Math.round(
+          (trendsData.currentInterest / trendsData.peakInterest) * 100
+        );
+        if (peakRatio >= 80) {
+          insights.push(
+            `Current interest is near its 12-month peak — great timing to publish.`
+          );
+        } else if (peakRatio < 40) {
+          insights.push(
+            `Current interest is only ${peakRatio}% of its 12-month peak — you may have missed the best window.`
+          );
+        }
+      }
+    }
+
     if (recentVideos > 10) {
       insights.push(
-        `${recentVideos} of the top 20 videos were uploaded in the last 90 days — this topic is very active right now.`
+        `${recentVideos} of the top 20 videos were uploaded in the last 90 days — very active topic.`
       );
     } else if (recentVideos > 3) {
       insights.push(
@@ -221,13 +248,13 @@ export async function POST(request) {
       );
     } else {
       insights.push(
-        `Only ${recentVideos} video(s) uploaded recently — this topic may be losing momentum.`
+        `Only ${recentVideos} video(s) uploaded recently — this topic may be slowing down on YouTube.`
       );
     }
 
     if (maxViews > 1000000) {
       insights.push(
-        `The top video has ${formatNumber(maxViews)} views, proving viral potential exists for this topic.`
+        `The top video has ${formatNumber(maxViews)} views, proving viral potential exists.`
       );
     } else if (maxViews > 100000) {
       insights.push(
@@ -245,58 +272,86 @@ export async function POST(request) {
       );
     }
 
-    // Step 10: Generate title suggestions based on top performers
-    const topTitles = videos
-      .slice(0, 5)
-      .map((v) => v.snippet.title);
+    // Title suggestions
+    const titleSuggestions = generateTitleSuggestions(idea);
 
-    const titleSuggestions = generateTitleSuggestions(idea, topTitles);
-
-    // Step 11: Build search volume estimate
-    // (YouTube API doesn't give exact search volume, so we estimate from results)
-    let searchVolumeEstimate;
-    let searchVolumeRating;
-    if (totalResults > 500000) {
-      searchVolumeEstimate = "Very High";
-      searchVolumeRating = "High";
-    } else if (totalResults > 100000) {
-      searchVolumeEstimate = "High";
-      searchVolumeRating = "High";
-    } else if (totalResults > 10000) {
-      searchVolumeEstimate = "Medium";
-      searchVolumeRating = "Medium";
-    } else if (totalResults > 1000) {
-      searchVolumeEstimate = "Low";
-      searchVolumeRating = "Low";
+    // Search volume estimate
+    let searchVolumeEstimate, searchVolumeRating;
+    if (trendsData.trend !== "Unknown" && trendsData.averageInterest > 0) {
+      // Use Google Trends data for a better estimate
+      if (trendsData.averageInterest > 70) {
+        searchVolumeEstimate = "Very High";
+        searchVolumeRating = "High";
+      } else if (trendsData.averageInterest > 45) {
+        searchVolumeEstimate = "High";
+        searchVolumeRating = "High";
+      } else if (trendsData.averageInterest > 25) {
+        searchVolumeEstimate = "Medium";
+        searchVolumeRating = "Medium";
+      } else {
+        searchVolumeEstimate = "Low";
+        searchVolumeRating = "Low";
+      }
     } else {
-      searchVolumeEstimate = "Very Low";
-      searchVolumeRating = "Low";
+      // Fallback to YouTube result count
+      if (totalResults > 500000) {
+        searchVolumeEstimate = "Very High";
+        searchVolumeRating = "High";
+      } else if (totalResults > 100000) {
+        searchVolumeEstimate = "High";
+        searchVolumeRating = "High";
+      } else if (totalResults > 10000) {
+        searchVolumeEstimate = "Medium";
+        searchVolumeRating = "Medium";
+      } else {
+        searchVolumeEstimate = "Low";
+        searchVolumeRating = "Low";
+      }
     }
 
-    // Step 12: Determine trend direction from upload freshness
+    // Trend display — now using real Google Trends data
     let trendDirection, trendChange, trendRating;
-    const recentRatio = recentVideos / videos.length;
-    if (recentRatio > 0.6) {
-      trendDirection = "Rising";
-      trendChange = `${recentVideos} recent`;
-      trendRating = "High";
-    } else if (recentRatio > 0.3) {
-      trendDirection = "Stable";
-      trendChange = `${recentVideos} recent`;
-      trendRating = "Medium";
+    if (trendsData.trend !== "Unknown") {
+      trendDirection = trendsData.trend;
+      trendChange =
+        (trendsData.percentChange >= 0 ? "+" : "") +
+        trendsData.percentChange +
+        "%";
+      if (
+        trendsData.trend === "Rising Fast" ||
+        trendsData.trend === "Rising"
+      ) {
+        trendRating = "High";
+      } else if (trendsData.trend === "Stable") {
+        trendRating = "Medium";
+      } else {
+        trendRating = "Low";
+      }
     } else {
-      trendDirection = "Declining";
-      trendChange = `${recentVideos} recent`;
-      trendRating = "Low";
+      // Fallback to YouTube freshness estimate
+      const recentRatio = recentVideos / videos.length;
+      if (recentRatio > 0.6) {
+        trendDirection = "Likely Rising";
+        trendChange = `${recentVideos} recent`;
+        trendRating = "High";
+      } else if (recentRatio > 0.3) {
+        trendDirection = "Likely Stable";
+        trendChange = `${recentVideos} recent`;
+        trendRating = "Medium";
+      } else {
+        trendDirection = "Likely Declining";
+        trendChange = `${recentVideos} recent`;
+        trendRating = "Low";
+      }
     }
 
-    // Build competition rating (inverse — low competition is good)
+    // Competition rating (inverse — low competition is good)
     let competitionRating;
     if (competitionLevel === "Low") competitionRating = "High";
     else if (competitionLevel === "Medium") competitionRating = "Medium";
     else competitionRating = "Low";
 
-    // Build title rating
+    // Title rating
     let titleRating;
     if (titleScore >= 7) titleRating = "High";
     else if (titleScore >= 5) titleRating = "Medium";
@@ -306,7 +361,12 @@ export async function POST(request) {
       score,
       label,
       color,
-      summary: generateSummary(score, competitionLevel, trendDirection, avgViews),
+      summary: generateSummary(
+        score,
+        competitionLevel,
+        trendsData.trend !== "Unknown" ? trendsData.trend : trendDirection,
+        avgViews
+      ),
       searchVolume: {
         value: searchVolumeEstimate,
         rating: searchVolumeRating,
@@ -314,7 +374,10 @@ export async function POST(request) {
       competition: {
         value: competitionLevel,
         rating: competitionRating,
-        count: competitionCount > 1000 ? formatNumber(competitionCount) : competitionCount,
+        count:
+          competitionCount > 1000
+            ? formatNumber(competitionCount)
+            : competitionCount,
       },
       trendDirection: {
         value: trendDirection,
@@ -327,17 +390,7 @@ export async function POST(request) {
       },
       insights,
       titleSuggestions,
-      rawStats: {
-        avgViews,
-        maxViews,
-        medianViews,
-        avgLikes,
-        avgComments,
-        avgDaysAgo,
-        recentVideos,
-        totalResults,
-        engagementRate: engagementRate.toFixed(2),
-      },
+      trendData: trendsData.dataPoints || [],
     });
   } catch (error) {
     console.error("Analysis error:", error);
@@ -345,6 +398,134 @@ export async function POST(request) {
       { error: "Something went wrong. Please try again." },
       { status: 500 }
     );
+  }
+}
+
+// ===== HELPER FUNCTIONS =====
+
+async function fetchYouTubeData(idea, apiKey) {
+  try {
+    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
+      idea
+    )}&type=video&maxResults=20&order=relevance&key=${apiKey}`;
+
+    const searchResponse = await fetch(searchUrl);
+    const searchData = await searchResponse.json();
+
+    if (searchData.error) {
+      return { error: "YouTube API error: " + searchData.error.message };
+    }
+
+    const videos = searchData.items || [];
+    const totalResults = searchData.pageInfo?.totalResults || 0;
+
+    if (videos.length === 0) {
+      return { error: "No videos found for this topic" };
+    }
+
+    const videoIds = videos.map((v) => v.id.videoId).join(",");
+    const statsUrl = `https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${videoIds}&key=${apiKey}`;
+
+    const statsResponse = await fetch(statsUrl);
+    const statsData = await statsResponse.json();
+
+    return {
+      videos,
+      videoStats: statsData.items || [],
+      totalResults,
+    };
+  } catch (error) {
+    return { error: "Failed to fetch YouTube data" };
+  }
+}
+
+async function fetchTrendsData(idea) {
+  try {
+    // Extract the core topic for better trend matching
+    const keyword = idea
+      .replace(
+        /^(how to|why|what is|what are|the best|best|top|ultimate guide to)\s+/i,
+        ""
+      )
+      .trim();
+
+    const results = await googleTrends.interestOverTime({
+      keyword: keyword,
+      startTime: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000),
+      endTime: new Date(),
+      geo: "",
+    });
+
+    const parsed = JSON.parse(results);
+    const timelineData = parsed.default?.timelineData || [];
+
+    if (timelineData.length === 0) {
+      return {
+        trend: "Unknown",
+        percentChange: 0,
+        averageInterest: 0,
+        currentInterest: 0,
+        peakInterest: 0,
+        dataPoints: [],
+      };
+    }
+
+    const values = timelineData.map((point) => point.value[0]);
+    const currentInterest = values[values.length - 1];
+    const peakInterest = Math.max(...values);
+    const averageInterest = Math.round(
+      values.reduce((a, b) => a + b, 0) / values.length
+    );
+
+    const recentMonths = values.slice(-12);
+    const previousMonths = values.slice(-24, -12);
+
+    const recentAvg =
+      recentMonths.length > 0
+        ? recentMonths.reduce((a, b) => a + b, 0) / recentMonths.length
+        : 0;
+    const previousAvg =
+      previousMonths.length > 0
+        ? previousMonths.reduce((a, b) => a + b, 0) / previousMonths.length
+        : 0;
+
+    let percentChange = 0;
+    if (previousAvg > 0) {
+      percentChange = Math.round(
+        ((recentAvg - previousAvg) / previousAvg) * 100
+      );
+    }
+
+    let trend;
+    if (percentChange > 15) trend = "Rising Fast";
+    else if (percentChange > 5) trend = "Rising";
+    else if (percentChange > -5) trend = "Stable";
+    else if (percentChange > -15) trend = "Declining";
+    else trend = "Declining Fast";
+
+    const dataPoints = timelineData.slice(-26).map((point) => ({
+      date: point.formattedTime,
+      value: point.value[0],
+    }));
+
+    return {
+      trend,
+      percentChange,
+      averageInterest,
+      currentInterest,
+      peakInterest,
+      dataPoints,
+    };
+  } catch (error) {
+    console.error("Trends fetch error:", error);
+    return {
+      trend: "Unknown",
+      percentChange: 0,
+      averageInterest: 0,
+      currentInterest: 0,
+      peakInterest: 0,
+      dataPoints: [],
+    };
   }
 }
 
@@ -361,39 +542,38 @@ function generateSummary(score, competition, trend, avgViews) {
         ? "Competition is manageable"
         : "Despite high competition"
     }, the data shows solid demand with ${
-      trend === "Rising" ? "growing" : "steady"
+      trend.includes("Rising") ? "growing" : "steady"
     } interest. Videos in this space average ${formatNumber(avgViews)} views.`;
   } else if (score >= 40) {
     return `This topic has potential but comes with challenges. ${
       competition === "High" || competition === "Very High"
         ? "The space is crowded — you'll need a unique angle."
         : "Competition is moderate."
-    } Average views sit at ${formatNumber(avgViews)}. Consider refining your approach.`;
+    } Average views sit at ${formatNumber(avgViews)}. ${
+      trend.includes("Declining")
+        ? "Search interest is declining, so timing matters."
+        : "Consider refining your approach."
+    }`;
   } else {
     return `This topic carries risk. ${
       avgViews < 10000
         ? "Audience demand appears limited"
         : "Despite some existing views"
     }, ${
-      trend === "Declining"
-        ? "interest is declining"
+      trend.includes("Declining")
+        ? "interest is declining according to Google Trends"
         : "growth signals are weak"
     }. Consider pivoting to a related topic with stronger demand.`;
   }
 }
 
-function generateTitleSuggestions(idea, topTitles) {
-  // Generate variations based on proven title patterns
-  const suggestions = [];
+function generateTitleSuggestions(idea) {
   const topic = idea.replace(/^(how to|why|what|the|a|an)\s+/i, "").trim();
-
-  suggestions.push(`The Truth About ${capitalize(topic)} That Nobody Tells You`);
-  suggestions.push(
-    `${capitalize(topic)}: Complete Guide for ${new Date().getFullYear()}`
-  );
-  suggestions.push(`I Tried ${capitalize(topic)} for 30 Days — Here's What Happened`);
-
-  return suggestions;
+  return [
+    `The Truth About ${capitalize(topic)} That Nobody Tells You`,
+    `${capitalize(topic)}: Complete Guide for ${new Date().getFullYear()}`,
+    `I Tried ${capitalize(topic)} for 30 Days — Here's What Happened`,
+  ];
 }
 
 function capitalize(str) {
