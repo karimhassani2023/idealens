@@ -63,6 +63,31 @@ function MetricCard({ label, value, rating, detail, delay }) {
   const ratingColors = { High: "#22c55e", Medium: "#eab308", Low: "#ef4444" };
   const bgColors = { High: "rgba(34,197,94,0.08)", Medium: "rgba(234,179,8,0.08)", Low: "rgba(239,68,68,0.08)" };
 
+  // Context-aware labels based on which metric this is
+  const getLabel = () => {
+    if (label === "Competition") {
+      if (rating === "High") return "LOW";      // low competition = good (green)
+      if (rating === "Medium") return "MODERATE";
+      return "HIGH";                              // high competition = bad (red)
+    }
+    if (label === "Search Demand") {
+      if (rating === "High") return "HIGH";
+      if (rating === "Medium") return "MODERATE";
+      return "LOW";
+    }
+    if (label === "Trend") {
+      if (rating === "High") return "RISING";
+      if (rating === "Medium") return "STABLE";
+      return "FALLING";
+    }
+    if (label === "Title Score") {
+      if (rating === "High") return "GREAT";
+      if (rating === "Medium") return "OK";
+      return "NEEDS WORK";
+    }
+    return rating === "High" ? "STRONG" : rating === "Medium" ? "OK" : "WEAK";
+  };
+
   return (
     <div style={{
       background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)",
@@ -73,7 +98,7 @@ function MetricCard({ label, value, rating, detail, delay }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: 22, fontWeight: 700, color: "#f0f0f0" }}>{value}</span>
         <span style={{ fontSize: 11, fontWeight: 700, color: ratingColors[rating], background: bgColors[rating], padding: "4px 10px", borderRadius: 20, letterSpacing: 0.5 }}>
-          {rating === "High" ? "STRONG" : rating === "Medium" ? "OK" : "WEAK"}
+          {getLabel()}
         </span>
       </div>
       {detail && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", marginTop: 6 }}>{detail}</div>}
@@ -349,12 +374,7 @@ export default function Home() {
               )}
             </div>
 
-            {/* CTA */}
-            <div style={{ textAlign: "center", marginTop: 32, padding: 28, background: "linear-gradient(135deg, rgba(99,102,241,0.06), rgba(139,92,246,0.06))", border: "1px solid rgba(99,102,241,0.12)", borderRadius: 16 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "rgba(255,255,255,0.7)", marginBottom: 6 }}>Want deeper analysis for your channel?</div>
-              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", marginBottom: 16 }}>Connect your YouTube channel for personalized scoring.</div>
-              <button style={{ background: "linear-gradient(135deg, #6366f1, #7c3aed)", border: "none", borderRadius: 12, padding: "12px 32px", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "system-ui, -apple-system, sans-serif", boxShadow: "0 4px 16px rgba(99,102,241,0.3)" }}>Start Free Trial</button>
-            </div>
+           
 
             {/* Reset */}
             <div style={{ textAlign: "center", marginTop: 20 }}>
